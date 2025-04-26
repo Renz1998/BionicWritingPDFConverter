@@ -2,6 +2,9 @@
 
 Bionic Writing PDF Converter is a Python desktop application that applies bionic reading to PDF and EPUB (ebook) files while preserving the original images and formatting. The application is built using PyQt5 for the GUI, PyMuPDF for PDF processing, and ebooklib for EPUB processing.
 
+## Quick Start
+**Recommended:** To launch the app easily, just double-click `start.bat` in this folder. It will automatically activate the virtual environment (if present) and run the Python script.
+
 ## Features
 - **Bionic Reading**: Enhances text readability by bolding parts of words.
 - **Supports PDF and EPUB**: Works with both PDF and EPUB (ebook) files.
@@ -17,7 +20,7 @@ Bionic Writing PDF Converter is a Python desktop application that applies bionic
 - PyMuPDF
 - ebooklib
 - beautifulsoup4
-- Git LFS (for handling large files like `.exe` and `.pkg`)
+- Git LFS (for handling large files like `.pkg`)
 
 ## Installation
 1. Clone the repository:
@@ -30,34 +33,24 @@ Bionic Writing PDF Converter is a Python desktop application that applies bionic
    pip install -r requirements.txt
    pip install beautifulsoup4
    ```
-3. Install Git LFS (if not already installed):
+3. (Optional) Set up a virtual environment:
    ```bash
-   git lfs install
+   python -m venv .venv
+   .venv\Scripts\activate
    ```
 
 ## Usage
-1. Run the application:
+1. **Recommended:** Double-click `start.bat` to launch the app. It will activate the virtual environment (if present) and run the Python script.
+2. Alternatively, you can run the app manually:
    ```bash
    python main.py
    ```
-2. Use the GUI to:
+3. Use the GUI to:
    - Open a PDF or EPUB file.
    - If you open an EPUB, choose whether to save as EPUB or PDF.
    - Specify an output directory (optional).
    - Convert the file with bionic reading.
    - Shrink the converted PDF (optional, only for PDF output).
-
-## Building the Executable
-To create a standalone `.exe` file:
-1. Install PyInstaller:
-   ```bash
-   pip install pyinstaller
-   ```
-2. Run the following command:
-   ```bash
-   pyinstaller --onefile --windowed --icon=icon.ico --add-data "icon.png;." --add-data "patrick-star-to-do-list.gif;." --add-data "hacker-man-hacker.gif;." --add-data "finished-elijah-wood.gif;." main.py
-   ```
-3. The `.exe` file will be located in the `dist` folder.
 
 ## Notes
 - The application may become unresponsive during PDF shrinking due to the intensive processing required.
