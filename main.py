@@ -10,7 +10,7 @@ import time
 # Add QLineEdit, QHBoxLayout
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, QFileDialog, 
                              QLabel, QVBoxLayout, QWidget, QProgressBar, QDialog, 
-                             QLineEdit, QHBoxLayout, QMessageBox, QInputDialog) # Added QLineEdit, QHBoxLayout, QInputDialog
+                             QLineEdit, QHBoxLayout, QMessageBox, QInputDialog, QComboBox) # Added QLineEdit, QHBoxLayout, QInputDialog, QComboBox
 from PyQt5.QtCore import QThread, pyqtSignal, QUrl, QTimer, Qt  # Updated import for Qt
 from PyQt5.QtGui import QIcon, QDesktopServices, QMovie  # Import QIcon for setting the window icon, QDesktopServices for opening URLs, QMovie for GIFs
 import fitz  # PyMuPDF
@@ -238,6 +238,81 @@ class EpubConverterThread(QThread):
         except Exception as e:
             self.finished.emit(f'Error: {e}\n{traceback.format_exc()}')
 
+class ExperimentalPDFToEPUBThread(QThread):
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(str)
+    saving = pyqtSignal()
+    def __init__(self, file_path, bionic_reading_func, output_dir):
+        super().__init__()
+        self.file_path = file_path
+        self.bionic_reading = bionic_reading_func
+        self.output_dir = output_dir
+
+    def run(self):
+        import fitz, os, traceback, base64
+        from ebooklib import epub
+        from bs4 import BeautifulSoup
+        try:
+            doc = fitz.open(self.file_path)
+            book = epub.EpubBook()
+            book.set_identifier(os.path.basename(self.file_path))
+            book.set_title(os.path.splitext(os.path.basename(self.file_path))[0] + ' (Bionic)')
+            book.set_language('en')
+            chapters = []
+            image_items = []
+            total = len(doc)
+            for i, page in enumerate(doc):
+                html = '<html><body>'
+                # Extract images
+                img_tags = []
+                for img_index, img in enumerate(page.get_images(full=True)):
+                    xref = img[0]
+                    base_image = doc.extract_image(xref)
+                    img_bytes = base_image['image']
+                    img_ext = base_image['ext']
+                    img_id = f"img_{i}_{img_index}.{img_ext}"
+                    img_path = os.path.join(self.output_dir, img_id)
+                    with open(img_path, 'wb') as f:
+                        f.write(img_bytes)
+                    # Add image to EPUB
+                    epub_img = epub.EpubImage()
+                    epub_img.file_name = img_id
+                    epub_img.media_type = f"image/{img_ext}"
+                    epub_img.content = img_bytes
+                    book.add_item(epub_img)
+                    img_tags.append(f'<img src="{img_id}" style="max-width:100%;max-height:400px;display:block;margin:auto;"/>')
+                # Extract text
+                text = page.get_text("text")
+                bionic_html = self.bionic_reading(text).replace("\n", "<br>")
+                html += ''.join(img_tags)
+                html += f'<div style="margin-top:10px">{bionic_html}</div>'
+                html += '</body></html>'
+                chapter = epub.EpubHtml(title=f'Page {i+1}', file_name=f'page_{i+1}.xhtml', lang='en')
+                chapter.set_content(html)
+                book.add_item(chapter)
+                chapters.append(chapter)
+                self.progress.emit(int((i+1)/total*90))
+            # Assemble spine and TOC
+            book.toc = tuple(chapters)
+            book.spine = ['nav'] + chapters
+            book.add_item(epub.EpubNcx())
+            book.add_item(epub.EpubNav())
+            # Save EPUB
+            os.makedirs(self.output_dir, exist_ok=True)
+            out_path = os.path.join(self.output_dir, os.path.splitext(os.path.basename(self.file_path))[0] + '_bionic_images.epub')
+            self.saving.emit()
+            epub.write_epub(out_path, book)
+            # Clean up temporary image files
+            for img_file in os.listdir(self.output_dir):
+                if img_file.startswith("img_") and img_file.split(".")[-1].lower() in ["png", "jpg", "jpeg"]:
+                    try:
+                        os.remove(os.path.join(self.output_dir, img_file))
+                    except Exception:
+                        pass
+            self.finished.emit(out_path)
+        except Exception as e:
+            self.finished.emit(f'Error: {e}\n{traceback.format_exc()}')
+
 class BionicPreserveApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -303,6 +378,10 @@ class BionicPreserveApp(QMainWindow):
         self.browse_output_btn.clicked.connect(self.browse_output_dir)
         output_layout.addWidget(self.output_dir_edit)
         output_layout.addWidget(self.browse_output_btn)
+        # Restore last output directory if available
+        last_browse_dir = self.settings.get('last_browse_output_dir', '')
+        if last_browse_dir:
+            self.output_dir_edit.setText(last_browse_dir)
         # --- End Output Directory Widgets ---
 
         self.convert_btn = QPushButton('Convert')
@@ -351,6 +430,13 @@ class BionicPreserveApp(QMainWindow):
         top_bar.addWidget(self.dark_mode_btn)
         main_layout.addLayout(top_bar)
 
+        # Add experimental dropdown
+        self.experimental_combo = QComboBox()
+        self.experimental_combo.addItem("Standard PDF/EPUB conversion")
+        self.experimental_combo.addItem("PDF to EPUB (preserve images, experimental)")
+        self.experimental_combo.setToolTip("Experimental: Try PDF to EPUB with images preserved per page.")
+        main_layout.addWidget(self.experimental_combo)
+
         main_layout.addWidget(self.label)
         main_layout.addWidget(self.open_btn)
         main_layout.addWidget(output_label) # Add output label
@@ -383,14 +469,16 @@ class BionicPreserveApp(QMainWindow):
 
     # --- New Method to Browse Output Directory ---
     def browse_output_dir(self):
-        # Start browsing from the current path in the line edit, or user's home dir
-        start_dir = self.output_dir_edit.text() or os.path.expanduser("~") 
+        # Use last browsed dir if available, else current field, else home
+        start_dir = self.settings.get('last_browse_output_dir') or self.output_dir_edit.text() or os.path.expanduser("~")
         directory = QFileDialog.getExistingDirectory(self, "Select Output Directory", start_dir)
-        if directory: # If a directory was selected (not cancelled)
-            normalized_dir = os.path.normpath(directory) # Normalize path
+        if directory:
+            normalized_dir = os.path.normpath(directory)
             self.output_dir_edit.setText(normalized_dir)
-            self.last_output_dir = normalized_dir # Update last_output_dir immediately
-            # Call update_button_states after selecting a directory
+            self.last_output_dir = normalized_dir
+            # Save last browsed dir to settings
+            self.settings['last_browse_output_dir'] = normalized_dir
+            save_settings(self.settings)
             self.update_button_states()
     # --- End New Method ---
 
@@ -493,7 +581,14 @@ class BionicPreserveApp(QMainWindow):
         self.start_time = time.time() 
         self.timer.start(1000) 
         
-        if self.selected_file.lower().endswith('.epub'):
+        # Experimental PDF to EPUB (preserve images)
+        if self.selected_file.lower().endswith('.pdf') and self.is_experimental_pdf2epub():
+            self.converter_thread = ExperimentalPDFToEPUBThread(
+                self.selected_file,
+                self.bionic_reading,
+                output_dir
+            )
+        elif self.selected_file.lower().endswith('.epub'):
             self.converter_thread = EpubConverterThread(
                 self.selected_file,
                 self.bionic_reading,
@@ -703,6 +798,9 @@ class BionicPreserveApp(QMainWindow):
             self.dark_mode_btn.setText('🌙')
         # Always show percentage text in the progress bar
         self.progress_bar.setTextVisible(True)
+
+    def is_experimental_pdf2epub(self):
+        return self.experimental_combo.currentIndex() == 1
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
