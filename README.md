@@ -3,7 +3,9 @@
 Bionic Writing PDF Converter is a Python desktop application that applies bionic reading to PDF and EPUB (ebook) files while preserving the original images and formatting. The application is built using PyQt5 for the GUI, PyMuPDF for PDF processing, and ebooklib for EPUB processing.
 
 ## Quick Start
-**Recommended:** To launch the app easily, just double-click `start.bat` in this folder. It will automatically activate the virtual environment (if present) and run the Python script.
+**Recommended for regular users:** Double-click `run_silent.bat` to launch the app without a terminal window.
+
+**For developers or debugging:** Use `start.bat` to launch the app with a terminal window (to see output and errors).
 
 ## Features
 - **Bionic Reading**: Enhances text readability by bolding parts of words.
@@ -40,12 +42,13 @@ Bionic Writing PDF Converter is a Python desktop application that applies bionic
    ```
 
 ## Usage
-1. **Recommended:** Double-click `start.bat` to launch the app. It will activate the virtual environment (if present) and run the Python script.
-2. Alternatively, you can run the app manually:
+1. **Recommended for regular users:** Double-click `run_silent.bat` to launch the app without a terminal window.
+2. **For developers:** Double-click `start.bat` to launch the app with a terminal window for debugging.
+3. Alternatively, you can run the app manually:
    ```bash
    python main.py
    ```
-3. Use the GUI to:
+4. Use the GUI to:
    - Open a PDF or EPUB file.
    - If you open an EPUB, choose whether to save as EPUB or PDF.
    - Specify an output directory (optional).
