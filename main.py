@@ -22,6 +22,26 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="ebooklib")
 warnings.filterwarnings("ignore", category=FutureWarning, module="ebooklib")
 
+import json
+
+SETTINGS_FILE = 'settings.json'
+
+def load_settings():
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, 'r') as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_settings(settings):
+    try:
+        with open(SETTINGS_FILE, 'w') as f:
+            json.dump(settings, f)
+    except Exception:
+        pass
+
 # Modify PDFConverterThread to accept output directory
 class PDFConverterThread(QThread):
     progress = pyqtSignal(int)
@@ -174,7 +194,7 @@ class EpubConverterThread(QThread):
                     if len(word) < 3:
                         return '<span style="font-weight:bold">{}</span>'.format(word)
                     split = (len(word) + 1) // 2
-                    return '<span style="font-weight:bold">{}</span>{}'.format(word[:split], word[split:])
+                    return '<span style="font-weight:bold">{}</span>{word[split:]}'
                 words = text.split(' ')
                 return ' '.join([style_word(w) if w.isalpha() else w for w in words])
             for item in book.get_items():
@@ -221,6 +241,8 @@ class EpubConverterThread(QThread):
 class BionicPreserveApp(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.settings = load_settings()
+        self.dark_mode = self.settings.get('dark_mode', False)
         self.setWindowTitle('Bionic Writing PDF Converter')
         # --- Add Icon ---
         # Make sure 'icon.png' or 'icon.ico' exists in the same directory
@@ -263,6 +285,7 @@ class BionicPreserveApp(QMainWindow):
         )
 
         self.init_ui()
+        self.apply_theme(self.dark_mode)
 
     def init_ui(self):
         main_layout = QVBoxLayout() # Renamed layout to main_layout
@@ -313,6 +336,20 @@ class BionicPreserveApp(QMainWindow):
         self.idle_gif = QMovie(resource_path('patrick-star-to-do-list.gif'))
         self.gif_label.setMovie(self.idle_gif)
         self.idle_gif.start()
+
+        # Add dark mode toggle as a small icon-only button
+        self.dark_mode_btn = QPushButton()
+        self.dark_mode_btn.setCheckable(True)
+        self.dark_mode_btn.setChecked(self.dark_mode)
+        self.dark_mode_btn.setFixedSize(32, 32)
+        self.dark_mode_btn.setStyleSheet("QPushButton { border: none; background: transparent; font-size: 20px; } QPushButton:checked { background: transparent; }")
+        self.dark_mode_btn.setToolTip('Toggle dark mode')
+        self.dark_mode_btn.clicked.connect(self.toggle_dark_mode)
+        # Place the button at the top right
+        top_bar = QHBoxLayout()
+        top_bar.addStretch()
+        top_bar.addWidget(self.dark_mode_btn)
+        main_layout.addLayout(top_bar)
 
         main_layout.addWidget(self.label)
         main_layout.addWidget(self.open_btn)
@@ -474,6 +511,8 @@ class BionicPreserveApp(QMainWindow):
 
     def on_progress_update(self, value):
         self.progress_bar.setValue(value)
+        self.progress_bar.setFormat(f"{value}%")
+        self.progress_bar.setTextVisible(True)
 
     def on_saving_started(self):
         self.label.setText('Saving PDF... This may take a moment.')
@@ -482,7 +521,8 @@ class BionicPreserveApp(QMainWindow):
     def on_conversion_finished(self, out_path):
         self.timer.stop() 
         self.selected_file = None # Reset selected file after conversion
-        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("100%")
         
         if out_path.lower().startswith('error') or out_path.lower().startswith('exception'):
             # ... error handling ...
@@ -631,6 +671,38 @@ class BionicPreserveApp(QMainWindow):
 
         # Enable/Disable output directory editing
         self.output_dir_edit.setEnabled(not is_processing)
+
+    def toggle_dark_mode(self):
+        self.dark_mode = not self.dark_mode
+        self.apply_theme(self.dark_mode)
+        self.settings['dark_mode'] = self.dark_mode
+        save_settings(self.settings)
+
+    def apply_theme(self, dark):
+        if dark:
+            self.setStyleSheet(
+                "QWidget { font-family: Arial; font-size: 12pt; background-color: #232629; color: #f0f0f0; } "
+                "QPushButton { background-color: #444; color: #f0f0f0; border-radius: 5px; padding: 5px; } "
+                "QPushButton:disabled { background-color: #333; color: #888; } "
+                "QPushButton:hover:!disabled { background-color: #666; } "
+                "QLineEdit { border: 1px solid #555; border-radius: 5px; padding: 5px; background: #181a1b; color: #f0f0f0; } "
+                "QProgressBar { border: 1px solid #555; border-radius: 5px; text-align: center; background: #181a1b; color: #f0f0f0; } "
+                "QProgressBar::chunk { background-color: #4CAF50; } "
+            )
+            self.dark_mode_btn.setText('☀️')
+        else:
+            self.setStyleSheet(
+                "QWidget { font-family: Arial; font-size: 12pt; background-color: #ffffff; color: #222; } "
+                "QPushButton { background-color: #0078D7; color: white; border-radius: 5px; padding: 5px; } "
+                "QPushButton:disabled { background-color: #A9A9A9; color: #D3D3D3; } "
+                "QPushButton:hover:!disabled { background-color: #005A9E; } "
+                "QLineEdit { border: 1px solid #ccc; border-radius: 5px; padding: 5px; background: #fff; color: #222; } "
+                "QProgressBar { border: 1px solid #ccc; border-radius: 5px; text-align: center; background: #fff; color: #222; } "
+                "QProgressBar::chunk { background-color: #4CAF50; } "
+            )
+            self.dark_mode_btn.setText('🌙')
+        # Always show percentage text in the progress bar
+        self.progress_bar.setTextVisible(True)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
