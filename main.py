@@ -10,10 +10,17 @@ import time
 # Add QLineEdit, QHBoxLayout
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, QFileDialog, 
                              QLabel, QVBoxLayout, QWidget, QProgressBar, QDialog, 
-                             QLineEdit, QHBoxLayout, QMessageBox) # Added QLineEdit, QHBoxLayout
+                             QLineEdit, QHBoxLayout, QMessageBox, QInputDialog) # Added QLineEdit, QHBoxLayout, QInputDialog
 from PyQt5.QtCore import QThread, pyqtSignal, QUrl, QTimer, Qt  # Updated import for Qt
 from PyQt5.QtGui import QIcon, QDesktopServices, QMovie  # Import QIcon for setting the window icon, QDesktopServices for opening URLs, QMovie for GIFs
 import fitz  # PyMuPDF
+import ebooklib
+from ebooklib import epub
+from bs4 import BeautifulSoup
+
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="ebooklib")
+warnings.filterwarnings("ignore", category=FutureWarning, module="ebooklib")
 
 # Modify PDFConverterThread to accept output directory
 class PDFConverterThread(QThread):
@@ -144,6 +151,72 @@ class PDFShrinkThread(QThread):
             error_msg = f"Error shrinking PDF: {e}"
             print(f"{error_msg}\n{traceback.format_exc()}")
             self.finished.emit(error_msg)
+
+class EpubConverterThread(QThread):
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(str)
+    saving = pyqtSignal()
+    def __init__(self, file_path, bionic_reading_func, output_dir, output_format):
+        super().__init__()
+        self.file_path = file_path
+        self.bionic_reading = bionic_reading_func
+        self.output_dir = output_dir
+        self.output_format = output_format  # 'EPUB' or 'PDF'
+
+    def run(self):
+        import os, traceback
+        try:
+            book = epub.read_epub(self.file_path)
+            total_items = len([item for item in book.get_items() if item.get_type() == ebooklib.ITEM_DOCUMENT])
+            processed = 0
+            def bionic_html(text):
+                def style_word(word):
+                    if len(word) < 3:
+                        return '<span style="font-weight:bold">{}</span>'.format(word)
+                    split = (len(word) + 1) // 2
+                    return '<span style="font-weight:bold">{}</span>{}'.format(word[:split], word[split:])
+                words = text.split(' ')
+                return ' '.join([style_word(w) if w.isalpha() else w for w in words])
+            for item in book.get_items():
+                if item.get_type() == ebooklib.ITEM_DOCUMENT:
+                    soup = BeautifulSoup(item.get_content(), 'html.parser')
+                    for tag in soup.find_all(['p', 'span', 'li']):
+                        if tag.string and tag.string.strip():
+                            tag.string.replace_with(BeautifulSoup(bionic_html(tag.string), 'html.parser'))
+                    item.set_content(str(soup).encode('utf-8'))
+                    processed += 1
+                    self.progress.emit(int(processed / total_items * 90))
+            # Save as EPUB
+            base_name = os.path.splitext(os.path.basename(self.file_path))[0]
+            os.makedirs(self.output_dir, exist_ok=True)
+            if self.output_format == 'EPUB':
+                out_path = os.path.join(self.output_dir, f'{base_name}_bionic.epub')
+                self.saving.emit()
+                epub.write_epub(out_path, book)
+                self.finished.emit(out_path)
+            else:
+                # Convert to PDF: extract all text, apply bionic reading, and save as PDF
+                from PyQt5.QtGui import QTextDocument
+                from PyQt5.QtPrintSupport import QPrinter
+                from PyQt5.QtCore import QBuffer, QByteArray
+                from PyQt5.QtWidgets import QApplication
+                # Concatenate all text content
+                all_html = ''
+                for item in book.get_items():
+                    if item.get_type() == ebooklib.ITEM_DOCUMENT:
+                        all_html += item.get_content().decode('utf-8') + '<br/>'
+                # Use QTextDocument to render HTML to PDF
+                doc = QTextDocument()
+                doc.setHtml(all_html)
+                out_path = os.path.join(self.output_dir, f'{base_name}_bionic.pdf')
+                self.saving.emit()
+                printer = QPrinter()
+                printer.setOutputFormat(QPrinter.PdfFormat)
+                printer.setOutputFileName(out_path)
+                doc.print_(printer)
+                self.finished.emit(out_path)
+        except Exception as e:
+            self.finished.emit(f'Error: {e}\n{traceback.format_exc()}')
 
 class BionicPreserveApp(QMainWindow):
     def __init__(self):
@@ -287,8 +360,15 @@ class BionicPreserveApp(QMainWindow):
     def open_pdf(self):
         # Remember last directory (optional, basic implementation)
         start_dir = os.path.dirname(self.selected_file) if self.selected_file else ''
-        file_path, _ = QFileDialog.getOpenFileName(self, 'Open PDF', start_dir, 'PDF Files (*.pdf)')
+        file_path, _ = QFileDialog.getOpenFileName(self, 'Open File', start_dir, 'PDF or EPUB Files (*.pdf *.epub)')
         if file_path:
+            if file_path.lower().endswith('.epub'):
+                output_format, ok = QInputDialog.getItem(self, "EPUB Output Format", "Save EPUB as:", ["EPUB", "PDF"], 0, False)
+                if not ok:
+                    return  # User cancelled
+                self.selected_epub_output_format = output_format
+            else:
+                self.selected_epub_output_format = None
             self.selected_file = file_path
             self.label.setText(f'Loaded: {os.path.basename(file_path)}') 
             # Set default output directory and normalize it
@@ -376,8 +456,15 @@ class BionicPreserveApp(QMainWindow):
         self.start_time = time.time() 
         self.timer.start(1000) 
         
-        # Pass the output directory to the thread
-        self.converter_thread = PDFConverterThread(self.selected_file, self.bionic_reading, output_dir) 
+        if self.selected_file.lower().endswith('.epub'):
+            self.converter_thread = EpubConverterThread(
+                self.selected_file,
+                self.bionic_reading,
+                output_dir,
+                getattr(self, 'selected_epub_output_format', 'EPUB')
+            )
+        else:
+            self.converter_thread = PDFConverterThread(self.selected_file, self.bionic_reading, output_dir)
         self.converter_thread.progress.connect(self.on_progress_update)
         self.converter_thread.finished.connect(self.on_conversion_finished)
         self.converter_thread.saving.connect(self.on_saving_started)
@@ -537,7 +624,9 @@ class BionicPreserveApp(QMainWindow):
         self.open_btn.setEnabled(not is_processing)
         self.convert_btn.setEnabled(file_selected and not is_processing)
         self.browse_output_btn.setEnabled(not is_processing) # Always enabled unless processing
-        self.shrink_btn.setEnabled(conversion_done and not is_processing)
+        # Only enable shrink if last converted file is a PDF
+        is_pdf = self.last_converted_path and self.last_converted_path.lower().endswith('.pdf')
+        self.shrink_btn.setEnabled(conversion_done and is_pdf and not is_processing)
         self.open_folder_btn.setEnabled(output_dir_valid and not is_processing)
 
         # Enable/Disable output directory editing
